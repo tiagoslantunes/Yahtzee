@@ -99,48 +99,64 @@ def _parse_keep_string(s: str | None) -> list[int] | None:
             return None            # As soon as we encounter an invalid symbol (e.g., '0', '7', 'x'), we abort and signal invalid input by returning None.
     return digits                  # If we reach this point, every character was a valid die face.
 
-
-def select_keep(dice: list[int]) -> list[int]:
+def select_keep(
+    dice: list[int],
+    *,
+    min_counter: Counter | None = None
+) -> list[int]:
     """
-    Prompt the player to select which dice to **keep** (up to two re-rolls later).
+    Ask the player which dice to KEEP as a multiset string (e.g., '336' -> [3,3,6]).
 
     Parameters:
     dice : list[int]
-        Current 5-dice roll.
+        Current 5-dice hand.
+    min_counter : Counter | None
+        Lower-bound constraint for already locked multiplicities from prior step.
+        For every face v in min_counter, the player must keep at least min_counter[v].
+        (Prevents "un-keeping"; expansion to other faces is allowed.)
 
     Returns:
     list[int]
-        A list representing a *sub-multiset* of `dice` that the player keeps.
+        A valid kept multiset rendered as a list of ints.
 
-    Input Contract & Validation:
-    - Input is a multiset string, e.g., "336" means keep two 3s and one 6.
-    - We validate that the chosen multiset is contained in the rolled dice, using `collections.Counter` to compare **multiplicities** 
-    - Robustness: Any invalid character, or requesting dice not present, triggers a clear message and re-prompt (no crashes).
+    Academic notes:
+    - Input parsing is delegated to `_parse_keep_string` (separation of concerns).
+    - Feasibility is a *sub-multiset* test with Counters:
+         ∀v in want: want[v] ≤ pool[v].
+    - Lock constraint is a *lower-bound* test:
+         ∀v in min_counter: want[v] ≥ min_counter[v].
     """
-    while True:  # While loop until a valid selection is provided. 
+    while True:
         print(f"Current dice: {dice}")
-        raw = input("Type dice to KEEP (e.g., 336), or press Enter to keep none: ") # Read raw user input for the multiset-encoding of kept dice.
-        kept = _parse_keep_string(raw)
-        
-        if kept is None:
-            print("Invalid input: use only digits 1–6. Try again.") # If parsing failed, we provide feedback and restart the loop.
+        if min_counter and sum(min_counter.values()):
+            print(f"Locked ≥ : {sorted(min_counter.elements())}") # Show the locked dice in sorted order for clarity.
+            
+        raw = input("Type dice to KEEP (e.g., 336), or press Enter to keep none: ").strip()
+        kept_list = _parse_keep_string(raw)
+        if kept_list is None:
+            print("Invalid input: use only digits 1–6. Try again.")
             continue
 
-        # Verify multiset containment via Counters (hash-table semantics)
-        # At this point, `kept` is a well-typed list[int] but might still be semantically invalid if it requests dice that are not present in `dice`.
+        pool = Counter(dice)           # multiplicities available in current hand
+        want = Counter(kept_list)      # multiplicities requested by the player
 
-        # We therefore compare *multiplicities* using Counter (multiset semantics):
-        
-        pool = Counter(dice) # multiplicity of the actually rolled dice
-        
-        want = Counter(kept) # multiplicity of the requested 'kept' dice
-        
-        # The selection is valid iff for every face value v, want[v] <= pool[v].
-        if all(want[v] <= pool[v] for v in want):  # if any requested count exceeds what's in the pool, the choice is invalid.
-            return kept # Successful path: the requested sub-multiset is feasible.
+        # Enforce non-decreasing lock (no un-keep): want[v] ≥ min_counter[v]
+        if min_counter is not None:
+            short = {v: (min_counter[v], want[v]) for v in min_counter if want[v] < min_counter[v]}
+            if short:
+                parts = [f"need ≥{need} of '{v}' but chose {got}" for v, (need, got) in sorted(short.items())]
+                print("You cannot un-keep previously locked dice (" + "; ".join(parts) + "). Try again.")
+                continue
 
-            
-        print("You asked to keep dice you don't have. Try again.") # Failure path: user asked to keep dice not present (e.g., extra copies).
+        # Feasibility: want is a sub-multiset of pool → want[v] ≤ pool[v]
+        if all(want[v] <= pool[v] for v in want):
+            return list(want.elements())
+
+        # Helpful failure message: show exactly which faces were over-requested
+        over = {v: (want[v], pool[v]) for v in want if want[v] > pool[v]}
+        parts = [f"{w}× '{v}' but only {p}× available" for v, (w, p) in sorted(over.items())]
+        print(f"Error: You asked to keep dice you don't have ({'; '.join(parts)}). Try again.")
+
        
 
 
@@ -441,73 +457,60 @@ def play_round(card: dict[str, int | None]) -> dict[str, int | None]:
     Side Effects:
     Mutates `card` by setting exactly one category to a numeric score.
 
-    Pedagogical Trace:
-    - Demonstrates *loops* (bounded iteration with optional early exit), *conditionals*,
-      modular function calls (`select_keep`, `reroll`, `evaluate`, `choose`), and
-      *state mutation* within a dictionary — all core topics in introductory Python.
+    Flow:
+    - Roll #1 → choose keep (#1) → reroll → Roll #2
+    - After Roll #2, ask "Stop here? (y/N)" with guarded input:
+        * 'y'  → commit (no Roll #3)
+        * 'n'  → RE-PROMPT keep with a *non-decreasing lock* (must keep at least
+                 what was kept for Roll #2, but can add any other faces) → reroll → Roll #3
     """
-    # Initial roll of all five dice; sort to normalize presentation and make patterns visually apparent to the player.
+    # Initial roll — normalize by sorting so patterns are visible to the player.
     dice = roll_dice(5)
     dice.sort()
     print(f"\n--- New Round ---")
     print(f"Roll #1: {dice}")
 
-    # At most two additional rolls are allowed (roll #2 and roll #3).
-    # Each iteration asks the player which dice to *keep* and re-rolls the rest.
-    # We explicitly guard the "Stop here?" prompt so only 'y' or 'n' (or Enter=default 'n') are accepted.
-    for roll_no in (2, 3):
-        # Query the player for a sub-multiset of the current hand to preserve.
-        kept = select_keep(dice)
+    #  Roll #2 phase 
+    # Player selects a keep for Roll #1’s hand (no constraints yet).
+    keep2 = select_keep(dice)
+    dice = reroll(dice, keep2)
+    print(f"Roll #2: {dice}")
 
-        # Produce a new 5-dice hand by re-rolling the complement of `kept`.
-        dice = reroll(dice, kept)
-        print(f"Roll #{roll_no}: {dice}")
+    # Offer early stop with guarded input (Enter defaults to 'n').
+    while True:
+        ans = input("Stop here? (y/N): ").strip().lower()
+        if ans == "":
+            ans = "n"  # default per (y/N) convention
+        if ans in {"y", "n"}:
+            break
+        print("Please answer with 'y' (yes) or 'n' (no).")
 
-        # Offer an early stop only after roll #2 (optional). By the rules, after roll #3 we must stop, so no prompt is shown then.
-        if roll_no < 3:
-            # IMPORTANT clarification: advise that answering 'n' (or pressing Enter)
-            # performs the next (final) roll while *preserving the same `kept` selection*
-            # the player just chose. This makes the third roll deterministic with respect to the previous keep decision.
-            while True:
-                ans = input("Stop here? (y/N): ").strip().lower() # Read and clean input.
+    if ans == "y":
+        # Early commit: keep the current hand without consuming Roll #3.
+        final_dice = dice
+    else:
+        # Roll #3 phase (final) 
+        # Constraint: you CANNOT un-keep what you already kept for Roll #2,
+        # but you MAY add any other faces now.
+        locked = Counter(keep2)
+        if sum(locked.values()) > 0:
+            locked_list = sorted(list(locked.elements()))
+            print(f"Locked (must keep at least): {sorted(locked.elements())}")
+           
 
-                # Defensive input handling: we explicitly guard acceptable inputs.
-                # Empty string defaults to 'n' (as conventional `(y/N)` semantics indicate).
-                if ans == "":
-                    ans = "n"
+        # Re-prompt keep with the non-decreasing lock constraint only.
+        keep3 = select_keep(dice, min_counter=locked)
 
-                if ans in {"y", "n"}:
-                    break  # Validated input; proceed to branch below.
-                else:
-                    print("Please answer with 'y' (yes) or 'n' (no).")
+        # Perform the final reroll using this (possibly expanded) keep.
+        final_dice = reroll(dice, keep3)
+        print(f"Roll #3: {final_dice}")
 
-            if ans == "y":
-                # Early commit: keep the current hand; do not consume the remaining roll.
-                break
-            else:
-                # Explicitly model the third (final) roll using the SAME `kept` multiset.
-                # Didactic point: this encodes the *policy guarantee* that declining to stop
-                # will *preserve* the keep set for the next roll, avoiding another prompt.
-                dice = reroll(dice, kept)
-                print(f"Roll #3: {dice}")
-                break  # We have reached the maximum number of rolls.
-
-    # Compute the per-category scores for the final hand (pure function).
-    scores_now = evaluate(dice)
-
-    # Derive the set of categories already filled so we present only feasible choices (no double assignment).
+    # Scoring and commit (pure evaluation + validated category choice).
+    scores_now = evaluate(final_dice)
     used = {k for k, v in card.items() if v is not None}
-
-    # Let the player pick among the remaining categories, with validation.
     choice = choose(scores_now, used)
-
-    # Commit: mutate the scorecard by recording the chosen category's score for THIS round only.
-    #  Exactly one category is filled per round.
     card[choice] = scores_now[choice]
-
-    # Immediate feedback to the player for transparency.
     print(f"You scored {scores_now[choice]} points in '{choice}'.")
-
-    # Return the updated scorecard so the caller (main loop) can display it.
     return card
+
  
