@@ -109,5 +109,3 @@ Available categories for this roll:
   13. chance          -> 21
 Choose a number: 
 ```
-
-```
