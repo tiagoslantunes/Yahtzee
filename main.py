@@ -13,7 +13,7 @@ from yahtzee import (
     _bonus,
 )
 
-def main() -> None:
+def main():
     """
     Main game loop for Yahtzee (13 rounds).
 
