@@ -18,6 +18,10 @@ from collections import Counter     # Standard counting Abstract Data Type for m
 import random                       # Pseudo-Random Number Generator for dice rolls (uniform 1..6) [3]
 
 
+# Global variable (module level) lower bound locked used by select_keep()
+
+_KEEP_LOCK = None
+
 # Canonical Category Definitions
 
 # Note: we separate *upper* and *lower* sections as two lists so we can compute subtotals and bonus cleanly using membership.
@@ -36,7 +40,19 @@ LOWER_CATEGORIES = [
 ALL_CATEGORIES = UPPER_CATEGORIES + LOWER_CATEGORIES
 
 
-def roll_dice(n: int = 5) -> list[int]:
+def set_keep_lock(lock):
+    """
+    Configure the lower-bound lock for the next select_keep() prompt.
+
+    Pass None to clear the lock. Passing a Counter copies it defensively.
+    """
+
+    global _KEEP_LOCK
+    
+    _KEEP_LOCK = Counter(lock) if lock else None
+
+
+def roll_dice(n = 5):
     """
     Roll `n` unbiased six-faced dice.
 
@@ -52,8 +68,9 @@ def roll_dice(n: int = 5) -> list[int]:
     return [random.randint(1, 6) for _ in range(n)]
 
 
-def create_empty_scorecard() -> dict[str, int | None]:
+def create_empty_scorecard():
     """
+
     Construct an empty Yahtzee scorecard.
 
     Returns:
@@ -70,7 +87,7 @@ def create_empty_scorecard() -> dict[str, int | None]:
     return {k: None for k in ALL_CATEGORIES}
 
 
-def _parse_keep_string(s: str | None) -> list[int] | None:
+def _parse_keep_string(s):
     """
     Parse a multiset-encoding string of kept dice (e.g., "336" -> [3, 3, 6]).
 
@@ -97,41 +114,41 @@ def _parse_keep_string(s: str | None) -> list[int] | None:
             digits.append(int(ch)) # If ch is in '123456', we convert to int and append to the result
         else:
             return None            # As soon as we encounter an invalid symbol (e.g., '0', '7', 'x'), we abort and signal invalid input by returning None.
+
+    if len(digits) > 5:
+        return None            # Defensive: more than 5 dice is invalid input, so we return None.
+    
     return digits                  # If we reach this point, every character was a valid die face.
 
-def select_keep(
-    dice: list[int],
-    *,
-    min_counter: Counter | None = None
-) -> list[int]:
+def select_keep(dice):
     """
     Ask the player which dice to KEEP as a multiset string (e.g., '336' -> [3,3,6]).
 
     Parameters:
     dice : list[int]
         Current 5-dice hand.
-    min_counter : Counter | None
+    _KEEP_LOCK : Counter | None
         Lower-bound constraint for already locked multiplicities from prior step.
-        For every face v in min_counter, the player must keep at least min_counter[v].
-        (Prevents "un-keeping"; expansion to other faces is allowed.)
+        For every face v in _KEEP_LOCK, the player must keep at least _KEEP_LOCK[v].
+        (Prevents "un-keeping", expansion to other faces is allowed.)
 
     Returns:
     list[int]
         A valid kept multiset rendered as a list of ints.
 
-    Academic notes:
+    Notes:
     - Input parsing is delegated to `_parse_keep_string` (separation of concerns).
     - Feasibility is a *sub-multiset* test with Counters:
          ∀v in want: want[v] ≤ pool[v].
     - Lock constraint is a *lower-bound* test:
-         ∀v in min_counter: want[v] ≥ min_counter[v].
+         ∀v in _KEEP_LOCK: want[v] ≥ _KEEP_LOCK[v].
     """
     while True:
         print(f"Current dice: {dice}")
-        if min_counter and sum(min_counter.values()):
-            print(f"Locked ≥ : {sorted(min_counter.elements())}") # Show the locked dice in sorted order for clarity.
+        if _KEEP_LOCK and sum(_KEEP_LOCK.values()):
+            print(f"Locked ≥ : {sorted(_KEEP_LOCK.elements())}") # Show the locked dice in sorted order for clarity.
             
-        raw = input("Type dice to KEEP (e.g., 336), or press Enter to keep none: ").strip()
+        raw = input("Type dice to KEEP (e.g., 336), or press Enter to keep none: ")
         kept_list = _parse_keep_string(raw)
         if kept_list is None:
             print("Invalid input: use only digits 1–6. Try again.")
@@ -140,9 +157,9 @@ def select_keep(
         pool = Counter(dice)           # multiplicities available in current hand
         want = Counter(kept_list)      # multiplicities requested by the player
 
-        # Enforce non-decreasing lock (no un-keep): want[v] ≥ min_counter[v]
-        if min_counter is not None:
-            short = {v: (min_counter[v], want[v]) for v in min_counter if want[v] < min_counter[v]}
+        # Enforce non-decreasing lock (no un-keep): want[v] ≥ _KEEP_LOCK[v]
+        if _KEEP_LOCK is not None:
+            short = {v: (_KEEP_LOCK[v], want[v]) for v in _KEEP_LOCK if want[v] < _KEEP_LOCK[v]}
             if short:
                 parts = [f"need ≥{need} of '{v}' but chose {got}" for v, (need, got) in sorted(short.items())]
                 print("You cannot un-keep previously locked dice (" + "; ".join(parts) + "). Try again.")
@@ -160,7 +177,7 @@ def select_keep(
        
 
 
-def reroll(dice: list[int], kept: list[int]) -> list[int]:
+def reroll(dice, kept):
     """
     Reroll the dice that were not kept and return the new combined 5-dice hand.
 
@@ -184,7 +201,7 @@ def reroll(dice: list[int], kept: list[int]) -> list[int]:
         kept = kept[:len(dice)]
         num_kept = len(kept)
         
-    need = 5 - num_kept # Determine how many dice must be rolled so that total hand size remains 5.
+    need = len(dice) - num_kept # Determine how many dice must be rolled so that total hand size remains 5.
     
     new_rolls = roll_dice(need) # Generate the required number of fresh dice using the Pseudo-Random Number Generator (uniform 1..6).
     combined = kept + new_rolls # Construct the new hand by concatenating (list concatenation) the preserved dice with the new rolls.
@@ -195,7 +212,7 @@ def reroll(dice: list[int], kept: list[int]) -> list[int]:
     return combined # Return the updated 5-dice hand.
 
 
-def has_straight(dice: list[int], length: int) -> bool:
+def has_straight(dice, length):
     """
     Determine if `dice` contains a straight (sequence) of a given `length`.
 
@@ -211,7 +228,7 @@ def has_straight(dice: list[int], length: int) -> bool:
 
     Algorithmic Notes (didactic):
     - Convert to a *set* to remove duplicates, then sort -> strictly increasing. 
-    - Single pass counts the longest consecutive run (classic O(k) scan).
+    - Single pass counts the longest consecutive run.
     """
     # Remove duplicates using set() (since repeated faces do not help extend a sequence) and sort ascending so consecutive values differ by exactly +1 if they belong to the same run.
     vals = sorted(set(dice))
@@ -237,7 +254,7 @@ def has_straight(dice: list[int], length: int) -> bool:
     return longest >= length # A straight of requested size exists iff the longest consecutive streak meets or exceeds `length` (e.g., longest>=4 for small straight).
 
 
-def evaluate(dice: list[int]) -> dict[str, int]:
+def evaluate(dice):
     """
     Compute the **score value** of the current `dice` for every category.
 
@@ -255,10 +272,9 @@ def evaluate(dice: list[int]) -> dict[str, int]:
     - yahtzee         : any face has count == 5 -> 50, else 0.
     - chance          : sum(all dice).
 
-    Pedagogical Emphasis:
+    Notes:
     - Uses `Counter` as an efficient multiset (hash-table) to query frequencies.
     - Demonstrates `for` loops, generator expressions, and function calls
-      (modular decomposition) — all foundational syllabus topics. 
     """
 
     # Build a multiset of face frequencies, e.g., [3,3,3,5,6] -> {3:3, 5:1, 6:1}.
@@ -277,7 +293,7 @@ def evaluate(dice: list[int]) -> dict[str, int]:
     # Kinds:
     
     # Three of a kind:
-    # Valid iff some face appears at least 3 times; then score is sum(all dice), else 0.
+    # Valid iff some face appears at least 3 times, then score is sum(all dice), else 0.
     # any(c >= 3 ...) expresses “∃ face with multiplicity ≥ 3”.
     scores['three_of_a_kind'] = total if any(c >= 3 for c in counts.values()) else 0
 
@@ -288,11 +304,11 @@ def evaluate(dice: list[int]) -> dict[str, int]:
     # Full house (3 + 2):
     # Sort the multiset cardinalities in descending order and compare to [3,2].
     cs = sorted(counts.values(), reverse=True)
-    scores['full_house'] = 25 if cs == [3, 2] else 0
+    scores['full_house'] = 25 if cs == [3, 2] else 0 
 
     # Straights:
     # Delegate detection to `has_straight`, which checks the longest consecutive run.
-    # Small straight (length>=4) therefore 30; Large straight (length>=5) therefore 40.
+    # Small straight (length>=4) therefore 30, Large straight (length>=5) therefore 40.
     scores['four_straight'] = 30 if has_straight(dice, 4) else 0
     scores['five_straight'] = 40 if has_straight(dice, 5) else 0
 
@@ -307,7 +323,7 @@ def evaluate(dice: list[int]) -> dict[str, int]:
     return scores  # Return the complete category, score mapping for this roll.
 
 
-def _upper_subtotal(card: dict[str, int | None]) -> int:
+def _upper_subtotal(card):
     """Sum over the *upper* keys, skipping `None` (unused).
      Generator expression iterates deterministically over the required keys (UPPER_CATEGORIES = ['1','2','3','4','5','6']). 
      For each key `k`, we include card[k] in the sum only if the entry is not None (i.e., the category has been scored). Using a comprehension.
@@ -316,13 +332,13 @@ def _upper_subtotal(card: dict[str, int | None]) -> int:
     return sum(card[k] for k in UPPER_CATEGORIES if card[k] is not None)
 
 
-def _lower_subtotal(card: dict[str, int | None]) -> int:
+def _lower_subtotal(card):
     """Sum over the *lower* keys, skipping `None` (unused).
     Same pattern as above, but over the lower section categories."""
     return sum(card[k] for k in LOWER_CATEGORIES if card[k] is not None)
 
 
-def _bonus(upper_subtotal: int) -> int:
+def _bonus(upper_subtotal):
     """Upper-section bonus policy: +35 iff subtotal >= 63.
     Conditional expression (ternary): return 35 when the threshold condition
     is satisfied, else 0. Using >= implements the inclusive policy “at least 63”."""
@@ -330,16 +346,16 @@ def _bonus(upper_subtotal: int) -> int:
     return 35 if upper_subtotal >= 63 else 0
 
 
-def _fmt(v: int | None) -> str:
+def _fmt(v):
     """Human-readable rendering for score entries.
     Map internal sentinel None (meaning “unused category”) to a dash "-". Otherwise,
     convert the integer to a string for display. This keeps presentation concerns localized to one helper."""
     return "-" if v is None else str(v)
 
 
-def display_scorecard(card: dict[str, int | None]) -> None:
+def display_scorecard(card):
     """
-    Pretty-print the current scorecard, including:
+    Print the current scorecard, including:
     - Upper subtotal, bonus (threshold 63), lower subtotal, and total.
 
     Notes:
@@ -393,7 +409,7 @@ def display_scorecard(card: dict[str, int | None]) -> None:
     print("=================\n")
 
 
-def choose(scores: dict[str, int], used: set[str]) -> str:
+def choose(scores, used):
     """
     Display the available scoring categories and obtain a valid user choice.
 
@@ -414,7 +430,7 @@ def choose(scores: dict[str, int], used: set[str]) -> str:
     str
         The key of the chosen category (e.g., 'three_of_a_kind').
 
-    Implementation Notes:
+    Notes:
     - `avail` is derived from `ALL_CATEGORIES` to preserve canonical order.
     - Validation is two-step: format (digit) and valid range [1..len(avail)].
     """
@@ -449,8 +465,24 @@ def choose(scores: dict[str, int], used: set[str]) -> str:
         # Out of range: clear feedback on valid interval.
         print(f"Out of range. Enter a number between 1 and {len(avail)}.")
 
+def _commit(card, final_dice):
+    """
+    Evaluate, let the user choose a category, write score, and return immediately.
+    """
+    # Evaluate the final dice to get the score vector for this roll.
+    scores_now = evaluate(final_dice)
+    # Let the user choose a category from those not yet used.
+    used = {k for k, v in card.items() if v is not None}
+    # Prompt until a valid choice is made.
+    choice = choose(scores_now, used)
+    # Commit the score to the chosen category in the scorecard.
+    card[choice] = scores_now[choice]
+    # Inform the user of the committed score for clarity.
+    print(f"You scored {scores_now[choice]} points in '{choice}'.")
+    return card
 
-def play_round(card: dict[str, int | None]) -> dict[str, int | None]:
+
+def play_round(card):
     """
     Play one **complete** Yahtzee round (≤ 3 rolls then commit to a category).
 
@@ -470,47 +502,51 @@ def play_round(card: dict[str, int | None]) -> dict[str, int | None]:
     print(f"\n--- New Round ---")
     print(f"Roll #1: {dice}")
 
-    #  Roll #2 phase 
+    # Roll #2 phase no lock
     # Player selects a keep for Roll #1’s hand (no constraints yet).
+    set_keep_lock(None)  # Clear any prior lock (defensive).
     keep2 = select_keep(dice)
+
+    # If the player kept all 5 dice, we can skip Roll #2 and directly commit.
+    if len(keep2) == 5:
+        return _commit(card, dice)
+    
     dice = reroll(dice, keep2)
     print(f"Roll #2: {dice}")
 
     # Offer early stop with guarded input (Enter defaults to 'n').
     while True:
-        ans = input("Stop here? (y/N): ").strip().lower()
+        ans = input("Stop here? (y/N) or press Enter to continue: ").strip().lower()
         if ans == "":
             ans = "n"  # default per (y/N) convention
         if ans in {"y", "n"}:
             break
         print("Please answer with 'y' (yes) or 'n' (no).")
 
+    # Early stop phase
     if ans == "y":
         # Early commit: keep the current hand without consuming Roll #3.
-        final_dice = dice
-    else:
-        # Roll #3 phase (final) 
-        # Constraint: you CANNOT un-keep what you already kept for Roll #2,
-        # but you MAY add any other faces now.
-        locked = Counter(keep2)
-        if sum(locked.values()) > 0:
-            locked_list = sorted(list(locked.elements()))
-            print(f"Locked (must keep at least): {sorted(locked.elements())}")
-           
+        return _commit(card, dice)
+    
+    # Roll #3 phase lock to what was kept in Roll #2.
+    locked = Counter(keep2)
+    if sum(locked.values()) > 0:
+        print(f"Locked (must keep at least): {sorted(locked.elements())}")
+    
+    # Re-prompt keep with the non-decreasing lock constraint only.
+    set_keep_lock(locked)
+    keep3 = select_keep(dice)
+    set_keep_lock(None)  # Clear the lock after use (defensive).
 
-        # Re-prompt keep with the non-decreasing lock constraint only.
-        keep3 = select_keep(dice, min_counter=locked)
+    # If the player kept all 5 dice, we can skip Roll #3.
+    if len(keep3) == 5:
+        return _commit(card, dice)
+    
+    # Perform the final reroll using this (possibly expanded) keep.
+    final_dice = reroll(dice, keep3)
+    print(f"Roll #3: {final_dice}")
 
-        # Perform the final reroll using this (possibly expanded) keep.
-        final_dice = reroll(dice, keep3)
-        print(f"Roll #3: {final_dice}")
-
-    # Scoring and commit (pure evaluation + validated category choice).
-    scores_now = evaluate(final_dice)
-    used = {k for k, v in card.items() if v is not None}
-    choice = choose(scores_now, used)
-    card[choice] = scores_now[choice]
-    print(f"You scored {scores_now[choice]} points in '{choice}'.")
-    return card
+    # Final commit: evaluate, choose, write score, and return.
+    return _commit(card, final_dice)
 
  
