@@ -1,5 +1,4 @@
-# 🎲 Yahtzee — Python Implementation (Logic-First README)
-
+# 🎲 Yahtzee — Python Implementation 
 A simplified **Yahtzee** for the *Programming for Data Science* course.
 It showcases functions, loops, dictionaries/`Counter`, modular design, and robust input validation.
 
