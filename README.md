@@ -199,7 +199,3 @@ You scored 30 points in 'four_straight'.
 * `Counter` is the right ADT for multiplicities: concise checks and clear error messages.
 * **Logic vs UI** separation: `yahtzee.py` is testable; `main.py` handles flow/prints only.
 * Non-decreasing **lock** on roll #3 matches real gameplay intent and prevents accidental “un-keeping”.
-
----
-
-If you want, I can also turn this into a nicely formatted **PDF** or add a minimal **doctest/pytest** suite for the helpers.
