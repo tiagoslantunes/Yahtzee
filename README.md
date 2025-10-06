@@ -38,7 +38,7 @@ It demonstrates core programming concepts such as functions, loops, dictionaries
 1. Make sure you have **Python 3.10+** installed.  
    (Type `python --version` in your terminal to check.)
 
-2. Clone or download the project folder.  
+2. Clone or download the project folder
 
 3. Run the game from the terminal
 
